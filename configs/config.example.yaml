@@ -1,0 +1,8 @@
+# Copy this file to e.g. config.dev.yaml and adjust values per environment.
+app:
+  name: AgentsForAgents
+  log_level: INFO
+  timezone: UTC
+features:
+  enable_tracing: false
+  max_concurrent_agents: 4
