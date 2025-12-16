@@ -82,20 +82,21 @@ Steps to add a custom tool:
 
 The default capabilities are described in `agents/default_tools.json`. You can edit this file, or create your own JSON specification and load it via `ToolRegistry.from_json("path/to/tools.json")` to bootstrap the registry in bulk.
 
-### Configuring OpenAI access
+### Configuring providers & manifests
 
-- Install dependencies (`poetry install`) so `openai`, `anthropic`, `python-dotenv`, and `requests` are available.
+- Install dependencies (`poetry install`) so `openai`, `anthropic`, `python-dotenv`, `pydantic`, and `requests` are available.
 - Copy `.env.example` to `.env`, set `LLM_PROVIDER` to your preferred backend, and populate the corresponding credentials. Supported providers:
   - `openai` (default): requires `OPENAI_API_KEY` (optionally `OPENAI_MODEL`).
   - `azure_openai`: requires `AZURE_OPENAI_{API_KEY,ENDPOINT,DEPLOYMENT}` (version optional).
   - `azure_foundry`: requires `AZURE_FOUNDRY_{API_KEY,ENDPOINT,DEPLOYMENT}` (version optional).
   - `claude`: requires `ANTHROPIC_API_KEY` (optionally `CLAUDE_MODEL`).
 - The planner calls `load_dotenv()` on import so values from `.env` are available automatically.
+- Set `PLAN_MANIFEST_PATH` if you want to store plan manifests somewhere other than `plan_manifests.jsonl`.
 - To customize the LLM behavior (e.g., use a mock in tests or a different foundation model), provide a `planner_backend` that implements the `LLMPlanner` protocol:
 
 ```python
 from agents import PlanningAgent, ToolRegistry
-from agents.llm import LLMGeneratedPlan, LLMPlanner
+from agents.llm import LLMGeneratedPlan, LLMPlanner, PlanStep
 
 class StubPlanner(LLMPlanner):
     def generate(
@@ -106,8 +107,7 @@ class StubPlanner(LLMPlanner):
         system_prompt: str | None = None,
     ) -> LLMGeneratedPlan:
         return LLMGeneratedPlan(
-            steps=["Mock step"],
-            rationale=f"Deterministic test planner (prompt={system_prompt})",
+            steps=[PlanStep(tool="Mock", rationale=f"prompt={system_prompt}", metadata={})],
         )
 
 agent = PlanningAgent(planner_backend=StubPlanner())

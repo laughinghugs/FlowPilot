@@ -23,8 +23,8 @@ class StubPlanner:
         return self.plan
 
 
-def test_planning_agent_generates_plan_for_rag_request():
-    agent = PlanningAgent(planner_backend=StubPlanner())
+def test_planning_agent_generates_plan_for_rag_request(tmp_path):
+    agent = PlanningAgent(planner_backend=StubPlanner(), manifest_path=str(tmp_path / "manifest.jsonl"))
 
     result = agent.plan("Need retrieval, reranking, and generation for a RAG agent.")
 

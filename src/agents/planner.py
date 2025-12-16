@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Sequence
 
 from .llm import LLMGeneratedPlan, LLMPlanner, PlanStep, build_planner_from_env
+from .manifest import PlanManifestEntry, PlanManifestWriter
 from .registry import DEFAULT_TOOL_REGISTRY, ToolCapability, ToolRegistry
 
 
@@ -62,6 +64,7 @@ class PlanningAgent:
         registry: ToolRegistry | None = None,
         planner_backend: LLMPlanner | None = None,
         system_prompt: str | None = None,
+        manifest_path: str | None = None,
     ) -> None:
         if inventory and registry:
             raise ValueError("Provide either inventory or registry, not both.")
@@ -74,6 +77,8 @@ class PlanningAgent:
             self._inventory = ToolInventory.from_registry(self._registry)
         self._planner = planner_backend or build_planner_from_env()
         self._system_prompt = system_prompt
+        resolved_manifest_path = manifest_path or os.getenv("PLAN_MANIFEST_PATH", "plan_manifests.jsonl")
+        self._manifest_writer = PlanManifestWriter(resolved_manifest_path) if resolved_manifest_path else None
 
     def plan(self, user_message: str) -> PlanningResult:
         llm_plan = self._planner.generate(
@@ -81,9 +86,9 @@ class PlanningAgent:
             registry=self._registry,
             system_prompt=self._system_prompt,
         )
-        return self._convert_llm_plan(llm_plan)
+        return self._convert_llm_plan(llm_plan, user_message=user_message)
 
-    def _convert_llm_plan(self, llm_plan: LLMGeneratedPlan) -> PlanningResult:
+    def _convert_llm_plan(self, llm_plan: LLMGeneratedPlan, *, user_message: str) -> PlanningResult:
         if not llm_plan.steps and llm_plan.clarifying_question:
             return PlanningResult(clarifying_question=llm_plan.clarifying_question)
 
@@ -91,4 +96,15 @@ class PlanningAgent:
             raise ValueError("LLM did not return plan steps or clarification")
 
         plan = AgentPlan(steps=tuple(llm_plan.steps))
+        self._record_manifest(plan, user_message=user_message)
         return PlanningResult(plan=plan, clarifying_question=llm_plan.clarifying_question)
+
+    def _record_manifest(self, plan: AgentPlan, *, user_message: str) -> None:
+        if not self._manifest_writer:
+            return
+        entry = PlanManifestEntry.create(
+            user_message=user_message,
+            steps=plan.steps,
+            system_prompt=self._system_prompt,
+        )
+        self._manifest_writer.write(entry)
