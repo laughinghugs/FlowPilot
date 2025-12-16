@@ -1,4 +1,4 @@
-from agents_for_agents.core import AgentMessage, build_agent_response
+from agents import AgentMessage, build_agent_response
 
 
 def test_build_agent_response_handles_empty_history():

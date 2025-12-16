@@ -1,0 +1,42 @@
+[
+  {
+    "name": "InMemoryRetriever",
+    "category": "retrieval",
+    "description": "keyword-based recall over in-memory documents"
+  },
+  {
+    "name": "CompositeRetriever",
+    "category": "retrieval",
+    "description": "combine recall strategies for better coverage"
+  },
+  {
+    "name": "TemplateLLMGenerator",
+    "category": "generation",
+    "description": "deterministic template LLM responses"
+  },
+  {
+    "name": "LLMGenerator",
+    "category": "generation",
+    "description": "LLM API wrapper (abstract)"
+  },
+  {
+    "name": "HeuristicReranker",
+    "category": "rerank",
+    "description": "heuristic-driven reranking"
+  },
+  {
+    "name": "Reranker",
+    "category": "rerank",
+    "description": "reranking interface"
+  },
+  {
+    "name": "RagasEvaluator",
+    "category": "evaluation",
+    "description": "ragas-based evaluation"
+  },
+  {
+    "name": "RagEvaluator",
+    "category": "evaluation",
+    "description": "evaluation interface"
+  }
+]

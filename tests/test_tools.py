@@ -1,6 +1,6 @@
 import pytest
 
-from agents_for_agents.tools import (
+from tools import (
     CompositeRetriever,
     Document,
     HeuristicReranker,

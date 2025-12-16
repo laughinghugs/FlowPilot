@@ -4,10 +4,17 @@ version = "0.1.0"
 description = "Poetry-based scaffold for the AgentsForAgents codebase"
 authors = ["Saikat Bhattacharya <saikat@example.com>"]
 readme = "README.md"
-packages = [{ include = "agents_for_agents", from = "src" }]
+packages = [
+  { include = "agents", from = "src" },
+  { include = "tools", from = "src" }
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
+openai = "^1.40.0"
+python-dotenv = "^1.0.1"
+anthropic = "^0.31.0"
+requests = "^2.32.3"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4"
