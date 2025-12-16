@@ -10,10 +10,16 @@ from agents.llm import LLMGeneratedPlan
 class StubPlanner:
     def __init__(self, plan: LLMGeneratedPlan):
         self.plan = plan
-        self.calls: list[tuple[str, ToolRegistry]] = []
+        self.calls: list[tuple[str, ToolRegistry, str | None]] = []
 
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:
-        self.calls.append((user_message, registry))
+    def generate(
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
+        self.calls.append((user_message, registry, system_prompt))
         return self.plan
 
 
@@ -58,6 +64,7 @@ def test_planning_agent_uses_custom_registry_entries():
     assert result.plan is not None
     assert any("VectorRetriever" in step for step in result.plan.steps)
     assert stub.calls and stub.calls[0][1].capabilities()[0].name == "VectorRetriever"
+    assert stub.calls[0][2] is None
 
 
 def test_default_registry_matches_json_spec():

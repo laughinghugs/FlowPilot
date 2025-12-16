@@ -15,6 +15,7 @@ openai = "^1.40.0"
 python-dotenv = "^1.0.1"
 anthropic = "^0.31.0"
 requests = "^2.32.3"
+pydantic = "^2.8.2"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4"

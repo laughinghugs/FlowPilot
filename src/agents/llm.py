@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import requests
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, ValidationError
 
 try:  # pragma: no cover - optional at test time
     from openai import AzureOpenAI, OpenAI
@@ -25,6 +26,14 @@ from .registry import ToolRegistry
 
 load_dotenv()
 
+DEFAULT_SYSTEM_PROMPT = (
+    "You are an agent-creation strategist. Use available tools to craft plans. Respond in JSON only."
+)
+
+
+def _resolve_system_prompt(system_prompt: str | None) -> str:
+    return system_prompt.strip() if system_prompt else DEFAULT_SYSTEM_PROMPT
+
 
 @dataclass(frozen=True)
 class LLMGeneratedPlan:
@@ -38,7 +47,13 @@ class LLMGeneratedPlan:
 class LLMPlanner(Protocol):
     """Protocol for planner backends."""
 
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:  # pragma: no cover - interface
+    def generate(  # pragma: no cover - interface
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
         ...
 
 
@@ -83,8 +98,14 @@ class OpenAIPlanner(LLMPlanner):
         self._client = OpenAI(api_key=api_key)
         self._model = model or os.getenv("OPENAI_MODEL", "gpt-5.1-mini")
 
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:  # noqa: D401
-        messages = _build_openai_messages(user_message, registry)
+    def generate(  # noqa: D401
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
+        messages = _build_openai_messages(user_message, registry, system_prompt)
         response = self._client.chat.completions.create(
             model=self._model,
             response_format={"type": "json_object"},
@@ -111,8 +132,14 @@ class AzureOpenAIPlanner(LLMPlanner):
         self._client = AzureOpenAI(api_key=api_key, azure_endpoint=endpoint, api_version=api_version)
         self._deployment = deployment
 
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:  # noqa: D401
-        messages = _build_openai_messages(user_message, registry)
+    def generate(  # noqa: D401
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
+        messages = _build_openai_messages(user_message, registry, system_prompt)
         response = self._client.chat.completions.create(
             model=self._deployment,
             response_format={"type": "json_object"},
@@ -132,13 +159,19 @@ class AzureFoundryPlanner(LLMPlanner):
         if not all([self._endpoint, self._api_key, self._deployment]):
             raise EnvironmentError("Azure Foundry configuration is incomplete")
 
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:  # noqa: D401
+    def generate(  # noqa: D401
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
         url = (
             f"{self._endpoint}/openai/deployments/{self._deployment}/chat/completions"
             f"?api-version={self._api_version}"
         )
         payload = {
-            "messages": _build_openai_messages(user_message, registry),
+            "messages": _build_openai_messages(user_message, registry, system_prompt),
             "response_format": {"type": "json_object"},
         }
         headers = {
@@ -166,29 +199,36 @@ class ClaudePlanner(LLMPlanner):
         self._client = Anthropic(api_key=api_key)
         self._model = model or os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
 
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:  # noqa: D401
+    def generate(  # noqa: D401
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
         prompt = _build_user_prompt(user_message, registry)
         response = self._client.messages.create(
             model=self._model,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
             system=(
-                "You are an agent-creation strategist. Use available tools to craft a JSON response with"
-                " keys 'plan_steps', 'rationale', and optional 'clarifying_question'."
+                _resolve_system_prompt(system_prompt)
+                + " Include keys 'plan_steps', 'rationale', and optional 'clarifying_question'."
             ),
         )
         content = next((block.text for block in response.content if getattr(block, "text", None)), None)
         return _parse_plan_payload(content)
 
 
-def _build_openai_messages(user_message: str, registry: ToolRegistry) -> list[dict[str, str]]:
+def _build_openai_messages(
+    user_message: str,
+    registry: ToolRegistry,
+    system_prompt: str | None = None,
+) -> list[dict[str, str]]:
     return [
         {
             "role": "system",
-            "content": (
-                "You are an agent-creation strategist. Use GPT-class reasoning to map user goals to available tools."
-                " Respond in JSON only."
-            ),
+            "content": _resolve_system_prompt(system_prompt),
         },
         {"role": "user", "content": _build_user_prompt(user_message, registry)},
     ]

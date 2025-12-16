@@ -13,7 +13,14 @@ class StubPlanner:
             rationale="Covers retrieval, reranking, generation",
         )
 
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:  # noqa: D401
+    def generate(  # noqa: D401
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
+        assert system_prompt is None
         return self.plan
 
 

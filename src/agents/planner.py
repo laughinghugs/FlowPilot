@@ -62,6 +62,7 @@ class PlanningAgent:
         inventory: ToolInventory | None = None,
         registry: ToolRegistry | None = None,
         planner_backend: LLMPlanner | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         if inventory and registry:
             raise ValueError("Provide either inventory or registry, not both.")
@@ -73,9 +74,14 @@ class PlanningAgent:
             self._registry = registry or DEFAULT_TOOL_REGISTRY
             self._inventory = ToolInventory.from_registry(self._registry)
         self._planner = planner_backend or build_planner_from_env()
+        self._system_prompt = system_prompt
 
     def plan(self, user_message: str) -> PlanningResult:
-        llm_plan = self._planner.generate(user_message=user_message, registry=self._registry)
+        llm_plan = self._planner.generate(
+            user_message=user_message,
+            registry=self._registry,
+            system_prompt=self._system_prompt,
+        )
         return self._convert_llm_plan(llm_plan)
 
     def _convert_llm_plan(self, llm_plan: LLMGeneratedPlan) -> PlanningResult:

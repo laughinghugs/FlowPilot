@@ -98,13 +98,26 @@ from agents import PlanningAgent, ToolRegistry
 from agents.llm import LLMGeneratedPlan, LLMPlanner
 
 class StubPlanner(LLMPlanner):
-    def generate(self, *, user_message: str, registry: ToolRegistry) -> LLMGeneratedPlan:
+    def generate(
+        self,
+        *,
+        user_message: str,
+        registry: ToolRegistry,
+        system_prompt: str | None = None,
+    ) -> LLMGeneratedPlan:
         return LLMGeneratedPlan(
             steps=["Mock step"],
-            rationale="Deterministic test planner",
+            rationale=f"Deterministic test planner (prompt={system_prompt})",
         )
 
 agent = PlanningAgent(planner_backend=StubPlanner())
+```
+
+To steer the provider's behaviour further, pass a custom `system_prompt` when instantiating `PlanningAgent` (or set it on your custom planner):
+
+```python
+custom_prompt = "You are a terse architect. Respond with exactly three steps."
+agent = PlanningAgent(system_prompt=custom_prompt)
 ```
 
 ## Next steps
