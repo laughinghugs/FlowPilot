@@ -7,6 +7,7 @@ from .llm import (
     LLMGeneratedPlan,
     LLMPlanner,
     OpenAIPlanner,
+    PlanStep,
     build_planner_from_env,
 )
 from .core import AgentMessage, build_agent_response
@@ -24,6 +25,7 @@ __all__ = [
     "DEFAULT_TOOL_REGISTRY",
     "LLMPlanner",
     "LLMGeneratedPlan",
+    "PlanStep",
     "OpenAIPlanner",
     "AzureOpenAIPlanner",
     "AzureFoundryPlanner",

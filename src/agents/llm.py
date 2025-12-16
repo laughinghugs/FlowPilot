@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import requests
@@ -34,13 +34,38 @@ DEFAULT_SYSTEM_PROMPT = (
 def _resolve_system_prompt(system_prompt: str | None) -> str:
     return system_prompt.strip() if system_prompt else DEFAULT_SYSTEM_PROMPT
 
+DEFAULT_SYSTEM_PROMPT = (
+    "You are an agent-creation strategist. Use available tools to craft plans. Respond in JSON only."
+)
+
+
+def _resolve_system_prompt(system_prompt: str | None) -> str:
+    return system_prompt.strip() if system_prompt else DEFAULT_SYSTEM_PROMPT
+
+
+class PlanStepModel(BaseModel):
+    tool: str
+    rationale: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlannerResponseModel(BaseModel):
+    plan: list[PlanStepModel] = Field(default_factory=list)
+    clarifying_questions: str | None = None
+
+
+@dataclass(frozen=True)
+class PlanStep:
+    tool: str
+    rationale: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class LLMGeneratedPlan:
     """Structured output from an LLM planner."""
 
-    steps: list[str]
-    rationale: str
+    steps: list[PlanStep]
     clarifying_question: str | None = None
 
 
@@ -69,17 +94,32 @@ def _build_user_prompt(user_message: str, registry: ToolRegistry) -> str:
         f"{user_message}\n\n"
         "Available tools (choose only from these capabilities):\n"
         f"{tool_summary}\n\n"
-        "Return a JSON object with keys 'plan_steps' (list of step strings), 'rationale', and optionally"
-        " 'clarifying_question' if additional input is needed. Keep steps actionable and tool-aware."
+        "Return JSON: {\n"
+        '  "plan": [\n'
+        '    {"tool": "<tool name>", "rationale": "<why this tool>", "metadata": {"param": "value"}}\n'
+        "  ],\n"
+        '  "clarifying_questions": "<string if more info needed, else null>"\n'
+        "}\n"
+        "Each 'tool' must match one of the names listed above exactly. Metadata should capture execution"
+        " parameters (e.g., {'top_k': 5})."
     )
 
 
-def _parse_plan_payload(content: str | None) -> LLMGeneratedPlan:
-    data = json.loads(content or "{}")
-    steps = [str(step).strip() for step in data.get("plan_steps", []) if str(step).strip()]
-    rationale = data.get("rationale", "No rationale provided.")
-    clarifying = data.get("clarifying_question")
-    return LLMGeneratedPlan(steps=steps, rationale=rationale, clarifying_question=clarifying)
+def _parse_plan_payload(content: str | None, registry: ToolRegistry) -> LLMGeneratedPlan:
+    try:
+        response = PlannerResponseModel.model_validate_json(content or "{}")
+    except ValidationError as exc:  # pragma: no cover - provider specific
+        raise ValueError(f"Planner response is invalid: {exc}") from exc
+
+    tool_names = {capability.name for capability in registry.capabilities()}
+    steps: list[PlanStep] = []
+    for step in response.plan:
+        if step.tool not in tool_names:
+            raise ValueError(f"Planner referenced unknown tool '{step.tool}'")
+        steps.append(PlanStep(tool=step.tool, rationale=step.rationale, metadata=dict(step.metadata)))
+
+    clarifying = response.clarifying_questions
+    return LLMGeneratedPlan(steps=steps, clarifying_question=clarifying)
 
 
 class OpenAIPlanner(LLMPlanner):
@@ -112,7 +152,7 @@ class OpenAIPlanner(LLMPlanner):
             messages=messages,
         )
         content = response.choices[0].message.content
-        return _parse_plan_payload(content)
+        return _parse_plan_payload(content, registry)
 
 
 class AzureOpenAIPlanner(LLMPlanner):
@@ -145,7 +185,7 @@ class AzureOpenAIPlanner(LLMPlanner):
             response_format={"type": "json_object"},
             messages=messages,
         )
-        return _parse_plan_payload(response.choices[0].message.content)
+        return _parse_plan_payload(response.choices[0].message.content, registry)
 
 
 class AzureFoundryPlanner(LLMPlanner):
@@ -182,7 +222,7 @@ class AzureFoundryPlanner(LLMPlanner):
         response.raise_for_status()
         data = response.json()
         content = data["choices"][0]["message"]["content"]
-        return _parse_plan_payload(content)
+        return _parse_plan_payload(content, registry)
 
 
 class ClaudePlanner(LLMPlanner):
@@ -213,11 +253,12 @@ class ClaudePlanner(LLMPlanner):
             messages=[{"role": "user", "content": prompt}],
             system=(
                 _resolve_system_prompt(system_prompt)
-                + " Include keys 'plan_steps', 'rationale', and optional 'clarifying_question'."
+                + " Output JSON with keys 'plan' (list of {tool, rationale, metadata})"
+                + " and 'clarifying_questions'."
             ),
         )
         content = next((block.text for block in response.content if getattr(block, "text", None)), None)
-        return _parse_plan_payload(content)
+        return _parse_plan_payload(content, registry)
 
 
 def _build_openai_messages(

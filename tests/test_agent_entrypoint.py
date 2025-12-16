@@ -1,16 +1,15 @@
 from agents import PlanningAgent, ToolRegistry
-from agents.llm import LLMGeneratedPlan
+from agents.llm import LLMGeneratedPlan, PlanStep
 
 
 class StubPlanner:
     def __init__(self) -> None:
         self.plan = LLMGeneratedPlan(
             steps=[
-                "Use InMemoryRetriever for recall",
-                "Apply HeuristicReranker",
-                "Generate response via TemplateLLMGenerator",
-            ],
-            rationale="Covers retrieval, reranking, generation",
+                PlanStep(tool="InMemoryRetriever", rationale="Recall", metadata={"top_k": 3}),
+                PlanStep(tool="HeuristicReranker", rationale="Sort results", metadata={}),
+                PlanStep(tool="TemplateLLMGenerator", rationale="Respond", metadata={}),
+            ]
         )
 
     def generate(  # noqa: D401

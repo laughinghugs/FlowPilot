@@ -50,12 +50,12 @@ result = agent.plan("Build me a RAG bot that retrieves docs, reranks them, and e
 if result.plan:
     print("Plan:")
     for step in result.plan.steps:
-        print("-", step)
+        print(f"- Tool: {step.tool} | Rationale: {step.rationale} | Metadata: {step.metadata}")
 else:
     print("Need clarification:", result.clarifying_question)
 ```
 
-`PlanningAgent` sends the user request plus the available tool inventory to OpenAI's GPT-5 models (API key loaded automatically from `.env` via `python-dotenv`) and translates the JSON response into either a plan (steps + rationale) or a clarifying question.
+`PlanningAgent` sends the user request plus the available tool inventory to the configured LLM provider (API keys loaded automatically from `.env` via `python-dotenv`) and expects JSON shaped as `{"plan": [{"tool": "...", "rationale": "...", "metadata": {...}}], "clarifying_questions": "..."}`. The parsed result surfaces each step's tool, rationale, and metadata for downstream orchestration.
 
 ### Extending the tool inventory
 

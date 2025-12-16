@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from .llm import LLMGeneratedPlan, LLMPlanner, build_planner_from_env
+from .llm import LLMGeneratedPlan, LLMPlanner, PlanStep, build_planner_from_env
 from .registry import DEFAULT_TOOL_REGISTRY, ToolCapability, ToolRegistry
 
 
@@ -37,8 +37,7 @@ class ToolInventory:
 class AgentPlan:
     """Structured plan for assembling an AI agent."""
 
-    steps: Sequence[str]
-    rationale: str
+    steps: Sequence[PlanStep]
 
 
 @dataclass(frozen=True)
@@ -91,5 +90,5 @@ class PlanningAgent:
         if not llm_plan.steps:
             raise ValueError("LLM did not return plan steps or clarification")
 
-        plan = AgentPlan(steps=tuple(llm_plan.steps), rationale=llm_plan.rationale)
+        plan = AgentPlan(steps=tuple(llm_plan.steps))
         return PlanningResult(plan=plan, clarifying_question=llm_plan.clarifying_question)

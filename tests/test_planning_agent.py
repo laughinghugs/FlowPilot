@@ -4,7 +4,7 @@ from importlib import resources
 import pytest
 
 from agents import PlanningAgent, PlanningResult, ToolInventory, ToolRegistry
-from agents.llm import LLMGeneratedPlan
+from agents.llm import LLMGeneratedPlan, PlanStep
 
 
 class StubPlanner:
@@ -25,8 +25,10 @@ class StubPlanner:
 
 def test_planning_agent_generates_plan_for_rag_request():
     stub_plan = LLMGeneratedPlan(
-        steps=["Use InMemoryRetriever for recall", "Generate response via TemplateLLMGenerator"],
-        rationale="Covers retrieval + generation",
+        steps=[
+            PlanStep(tool="InMemoryRetriever", rationale="Recall documents", metadata={"top_k": 3}),
+            PlanStep(tool="TemplateLLMGenerator", rationale="Compose answer", metadata={}),
+        ]
     )
     agent = PlanningAgent(planner_backend=StubPlanner(stub_plan))
 
@@ -39,7 +41,7 @@ def test_planning_agent_generates_plan_for_rag_request():
 
 
 def test_planning_agent_requests_clarification_when_needed():
-    stub_plan = LLMGeneratedPlan(steps=[], rationale="", clarifying_question="Need more info")
+    stub_plan = LLMGeneratedPlan(steps=[], clarifying_question="Need more info")
     agent = PlanningAgent(planner_backend=StubPlanner(stub_plan))
 
     result = agent.plan("Do something vague")
@@ -53,8 +55,10 @@ def test_planning_agent_uses_custom_registry_entries():
     registry.register(name="VectorRetriever", category="retrieval", description="vector search")
     registry.register(name="TemplateLLMGenerator", category="generation", description="template responses")
     stub_plan = LLMGeneratedPlan(
-        steps=["Use VectorRetriever", "Use TemplateLLMGenerator"],
-        rationale="Custom stack",
+        steps=[
+            PlanStep(tool="VectorRetriever", rationale="Search dense vectors", metadata={"top_k": 5}),
+            PlanStep(tool="TemplateLLMGenerator", rationale="Format answer", metadata={}),
+        ]
     )
     stub = StubPlanner(stub_plan)
     agent = PlanningAgent(registry=registry, planner_backend=stub)
@@ -62,9 +66,21 @@ def test_planning_agent_uses_custom_registry_entries():
     result = agent.plan("Retrieve knowledge base entries")
 
     assert result.plan is not None
-    assert any("VectorRetriever" in step for step in result.plan.steps)
+    assert any(step.tool == "VectorRetriever" for step in result.plan.steps)
     assert stub.calls and stub.calls[0][1].capabilities()[0].name == "VectorRetriever"
     assert stub.calls[0][2] is None
+
+
+def test_planning_agent_passes_system_prompt_to_backend():
+    stub_plan = LLMGeneratedPlan(
+        steps=[PlanStep(tool="VectorRetriever", rationale="Reason", metadata={})]
+    )
+    stub = StubPlanner(stub_plan)
+    agent = PlanningAgent(planner_backend=stub, system_prompt="Be concise.")
+
+    agent.plan("Retrieve stuff")
+
+    assert stub.calls[0][2] == "Be concise."
 
 
 def test_default_registry_matches_json_spec():
