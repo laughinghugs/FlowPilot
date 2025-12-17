@@ -15,9 +15,10 @@ class StubPlanner:
     def generate(  # noqa: D401
         self,
         *,
-        user_message: str,
+        user_message: str | None = None,
         registry: ToolRegistry,
         system_prompt: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> LLMGeneratedPlan:
         assert system_prompt is None
         return self.plan

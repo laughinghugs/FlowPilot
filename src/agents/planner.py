@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from typing import Sequence
 
-from .llm import LLMGeneratedPlan, LLMPlanner, PlanStep, build_planner_from_env
+from .llm import CustomToolDefinition, LLMGeneratedPlan, LLMPlanner, PlanStep, build_planner_from_env
 from .manifest import PlanManifestEntry, PlanManifestWriter
 from .registry import DEFAULT_TOOL_REGISTRY, ToolCapability, ToolRegistry
 
@@ -48,6 +48,9 @@ class PlanningResult:
 
     plan: AgentPlan | None = None
     clarifying_question: str | None = None
+    conversation_history: tuple[dict[str, str], ...] = tuple()
+    plan_id: str | None = None
+    custom_tools: tuple[CustomToolDefinition, ...] = tuple()
 
     def require_plan(self) -> AgentPlan:
         if self.plan is None:
@@ -80,31 +83,91 @@ class PlanningAgent:
         resolved_manifest_path = manifest_path or os.getenv("PLAN_MANIFEST_PATH", "plan_manifests.jsonl")
         self._manifest_writer = PlanManifestWriter(resolved_manifest_path) if resolved_manifest_path else None
 
-    def plan(self, user_message: str) -> PlanningResult:
+    def plan(
+        self,
+        user_message: str | None = None,
+        *,
+        conversation_history: Sequence[dict[str, str]] | None = None,
+        system_prompt: str | None = None,
+    ) -> PlanningResult:
+        """
+        Generate or refine a plan based on the latest user message and optional chat history.
+
+        Args:
+            user_message: Most recent user instruction. Optional if provided in conversation_history.
+            conversation_history: Existing history of role/content dicts (system/user/AI).
+            system_prompt: Optional override for the system prompt on this call.
+        """
+        history_list = list(conversation_history or [])
+        effective_user_message = (user_message or _latest_user_message(history_list))
+        if not effective_user_message:
+            raise ValueError(
+                "PlanningAgent.plan requires a user_message or a conversation_history containing a user entry."
+            )
+
         llm_plan = self._planner.generate(
-            user_message=user_message,
+            user_message=effective_user_message,
             registry=self._registry,
-            system_prompt=self._system_prompt,
+            system_prompt=system_prompt or self._system_prompt,
+            conversation_history=history_list or None,
         )
-        return self._convert_llm_plan(llm_plan, user_message=user_message)
+        return self._convert_llm_plan(llm_plan, user_message=effective_user_message)
 
     def _convert_llm_plan(self, llm_plan: LLMGeneratedPlan, *, user_message: str) -> PlanningResult:
+        history = tuple(llm_plan.conversation_history)
+        custom_tools = tuple(llm_plan.custom_tools)
         if not llm_plan.steps and llm_plan.clarifying_question:
-            return PlanningResult(clarifying_question=llm_plan.clarifying_question)
+            return PlanningResult(
+                clarifying_question=llm_plan.clarifying_question,
+                conversation_history=history,
+                custom_tools=custom_tools,
+            )
 
         if not llm_plan.steps:
             raise ValueError("LLM did not return plan steps or clarification")
 
         plan = AgentPlan(steps=tuple(llm_plan.steps))
-        self._record_manifest(plan, user_message=user_message)
-        return PlanningResult(plan=plan, clarifying_question=llm_plan.clarifying_question)
+        plan_id = None
+        if llm_plan.clarifying_question is None:
+            plan_id = self._record_manifest(
+                plan,
+                user_message=user_message,
+                custom_tools=llm_plan.custom_tools,
+            )
+        return PlanningResult(
+            plan=plan,
+            clarifying_question=llm_plan.clarifying_question,
+            conversation_history=history,
+            plan_id=plan_id,
+            custom_tools=custom_tools,
+        )
 
-    def _record_manifest(self, plan: AgentPlan, *, user_message: str) -> None:
+    def _record_manifest(
+        self,
+        plan: AgentPlan,
+        *,
+        user_message: str,
+        custom_tools: Sequence[CustomToolDefinition] | None = None,
+    ) -> str | None:
         if not self._manifest_writer:
-            return
+            return None
         entry = PlanManifestEntry.create(
             user_message=user_message,
             steps=plan.steps,
             system_prompt=self._system_prompt,
+            custom_tools=custom_tools,
         )
         self._manifest_writer.write(entry)
+        return entry.plan_id
+
+
+def _latest_user_message(history: Sequence[dict[str, str]] | None) -> str | None:
+    """Return the most recent non-empty user message from the conversation history."""
+    if not history:
+        return None
+    for message in reversed(history):
+        if message.get("role", "").lower() == "user":
+            content = message.get("content", "").strip()
+            if content:
+                return content
+    return None

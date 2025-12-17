@@ -1,9 +1,8 @@
 """Agent-centric helpers."""
 
 from .llm import (
-    AzureFoundryPlanner,
     AzureOpenAIPlanner,
-    ClaudePlanner,
+    CustomToolDefinition,
     LLMGeneratedPlan,
     LLMPlanner,
     OpenAIPlanner,
@@ -11,6 +10,8 @@ from .llm import (
     build_planner_from_env,
 )
 from .core import AgentMessage, build_agent_response
+from .pipeline import PipelineAgent, PipelineResult, ToolNotFoundError
+from .pipeline_builder import PipelineWorkspace, build_pipeline_workspace
 from .planner import AgentPlan, PlanningAgent, PlanningResult, ToolInventory
 from .registry import ToolRegistry, DEFAULT_TOOL_REGISTRY
 
@@ -25,10 +26,14 @@ __all__ = [
     "DEFAULT_TOOL_REGISTRY",
     "LLMPlanner",
     "LLMGeneratedPlan",
+    "CustomToolDefinition",
     "PlanStep",
     "OpenAIPlanner",
     "AzureOpenAIPlanner",
-    "AzureFoundryPlanner",
-    "ClaudePlanner",
     "build_planner_from_env",
+    "PipelineAgent",
+    "PipelineResult",
+    "ToolNotFoundError",
+    "PipelineWorkspace",
+    "build_pipeline_workspace",
 ]

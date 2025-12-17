@@ -27,15 +27,12 @@ from .registry import ToolRegistry
 load_dotenv()
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are an agent-creation strategist. Use available tools to craft plans. Respond in JSON only."
-)
-
-
-def _resolve_system_prompt(system_prompt: str | None) -> str:
-    return system_prompt.strip() if system_prompt else DEFAULT_SYSTEM_PROMPT
-
-DEFAULT_SYSTEM_PROMPT = (
-    "You are an agent-creation strategist. Use available tools to craft plans. Respond in JSON only."
+    "You are an agent-creation strategist. Review the registered tools first. "
+    "If they are sufficient, outline a plan using only those tools. "
+    "When no existing tool can satisfy a required capability, describe a custom tool concept, "
+    "collecting the input format, data sources to connect, and any credentials or API keys needed. "
+    "Ask follow-up questions in clear, non-technical language to gather those details before finalizing the plan. "
+    "Always respond in JSON."
 )
 
 
@@ -49,9 +46,22 @@ class PlanStepModel(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+JSONLike = dict[str, Any]
+
+
+class CustomToolModel(BaseModel):
+    name: str
+    purpose: str
+    inputs: str | JSONLike
+    data_sources: str | JSONLike | None = None
+    credentials: str | JSONLike | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class PlannerResponseModel(BaseModel):
     plan: list[PlanStepModel] = Field(default_factory=list)
     clarifying_questions: str | None = None
+    custom_tools: list[CustomToolModel] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,111 @@ class LLMGeneratedPlan:
 
     steps: list[PlanStep]
     clarifying_question: str | None = None
+    conversation_history: list[dict[str, str]] = field(default_factory=list)
+    custom_tools: list["CustomToolDefinition"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CustomToolDefinition:
+    name: str
+    purpose: str
+    inputs: str | JSONLike
+    data_sources: str | JSONLike | None = None
+    credentials: str | JSONLike | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def _normalize_history_for_model(
+    conversation_history: list[dict[str, str]] | None,
+) -> list[dict[str, str]]:
+    """
+    Convert external conversation roles to the roles expected by provider SDKs.
+    External format uses 'AI' for assistant responses; provider SDKs expect 'assistant'.
+    This returns a new list with role normalized: 'AI' -> 'assistant'. Keeps 'system' and 'user'.
+    """
+    if not conversation_history:
+        return []
+    normalized: list[dict[str, str]] = []
+    for msg in conversation_history:
+        role = msg.get("role", "").lower()
+        if role == "ai":
+            provider_role = "assistant"
+        elif role in ("assistant", "system", "user"):
+            provider_role = role
+        else:
+            # unknown role - preserve as-is (safer) but lowercased
+            provider_role = role
+        normalized.append({"role": provider_role, "content": msg.get("content", "")})
+    return normalized
+
+def _build_openai_messages(
+    user_message: str | None,
+    registry: ToolRegistry,
+    system_prompt: str | None = None,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    """
+    Build messages list with a single system prompt (resolved from param, history, or default),
+    then the conversation history (normalized), and finally the current user message (if any).
+
+    Accepts external conversation format where assistant messages may have role "AI".
+    """
+    messages: list[dict[str, str]] = []
+
+    # If system_prompt provided explicitly, use it; otherwise try to find first system message
+    resolved_system: str | None = None
+    if system_prompt:
+        resolved_system = _resolve_system_prompt(system_prompt)
+    elif conversation_history:
+        # find first system message in conversation_history
+        for msg in conversation_history:
+            if msg.get("role", "").lower() == "system":
+                resolved_system = msg.get("content", "").strip()
+                break
+
+    # Ensure there's always a system message
+    messages.append({"role": "system", "content": resolved_system or _resolve_system_prompt(None)})
+
+    # Normalize conversation history and append non-system messages (we've already handled system)
+    normalized = _normalize_history_for_model(conversation_history)
+    for msg in normalized:
+        if msg["role"] == "system":
+            # skip duplicate system entries (we already placed the system message at start)
+            continue
+        messages.append(msg)
+
+    # Add current user message (as full prompt with tool list) if provided
+    if user_message:
+        messages.append({"role": "user", "content": _build_user_prompt(user_message, registry)})
+
+    return messages
+
+
+def _build_external_history(
+    messages: list[dict[str, str]],
+    assistant_content: str,
+) -> list[dict[str, str]]:
+    """Map provider roles back to external history format with 'AI' assistant entries."""
+    if not messages:
+        return [{"role": "AI", "content": assistant_content}]
+
+    external: list[dict[str, str]] = []
+    first = messages[0]
+    if first.get("role") == "system":
+        external.append({"role": "system", "content": first.get("content", "")})
+    else:
+        external.append({"role": first.get("role", "system"), "content": first.get("content", "")})
+
+    for msg in messages[1:]:
+        role = msg.get("role", "")
+        if role == "assistant":
+            external_role = "AI"
+        else:
+            external_role = role
+        external.append({"role": external_role, "content": msg.get("content", "")})
+
+    external.append({"role": "AI", "content": assistant_content})
+    return external
 
 
 class LLMPlanner(Protocol):
@@ -75,9 +190,10 @@ class LLMPlanner(Protocol):
     def generate(  # pragma: no cover - interface
         self,
         *,
-        user_message: str,
+        user_message: str | None = None,
         registry: ToolRegistry,
         system_prompt: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> LLMGeneratedPlan:
         ...
 
@@ -98,10 +214,21 @@ def _build_user_prompt(user_message: str, registry: ToolRegistry) -> str:
         '  "plan": [\n'
         '    {"tool": "<tool name>", "rationale": "<why this tool>", "metadata": {"param": "value"}}\n'
         "  ],\n"
-        '  "clarifying_questions": "<string if more info needed, else null>"\n'
+        '  "clarifying_questions": "<string if more info needed, else null>",\n'
+        '  "custom_tools": [\n'
+        '    {\n'
+        '      "name": "<proposed tool>",\n'
+        '      "purpose": "<plain-language summary>",\n'
+        '      "inputs": "<what information the tool expects (string or JSON)>",\n'
+        '      "data_sources": "<APIs, databases, or files to connect (string or JSON)>",\n'
+        '      "credentials": "<api keys or auth needed (string or JSON)>,"\n'
+        '      "metadata": {"linked_plan_step": "<tool usage context>"}\n'
+        "    }\n"
+        "  ]\n"
         "}\n"
-        "Each 'tool' must match one of the names listed above exactly. Metadata should capture execution"
-        " parameters (e.g., {'top_k': 5})."
+        "Only add entries to 'custom_tools' when no existing tool suffices. Ask clarifying questions in simple language"
+        " to gather any required inputs, data sources, or credentials. Each 'tool' in the plan must be either an existing"
+        " capability or reference one of the newly defined custom tools explicitly."
     )
 
 
@@ -114,12 +241,24 @@ def _parse_plan_payload(content: str | None, registry: ToolRegistry) -> LLMGener
     tool_names = {capability.name for capability in registry.capabilities()}
     steps: list[PlanStep] = []
     for step in response.plan:
-        if step.tool not in tool_names:
-            raise ValueError(f"Planner referenced unknown tool '{step.tool}'")
-        steps.append(PlanStep(tool=step.tool, rationale=step.rationale, metadata=dict(step.metadata)))
+        if step.tool in tool_names:
+            # raise ValueError(f"Planner referenced unknown tool '{step.tool}'")
+            steps.append(PlanStep(tool=step.tool, rationale=step.rationale, metadata=dict(step.metadata)))
+
+    custom_tools = [
+        CustomToolDefinition(
+            name=tool.name,
+            purpose=tool.purpose,
+            inputs=tool.inputs,
+            data_sources=tool.data_sources,
+            credentials=tool.credentials,
+            metadata=dict(tool.metadata),
+        )
+        for tool in response.custom_tools
+    ]
 
     clarifying = response.clarifying_questions
-    return LLMGeneratedPlan(steps=steps, clarifying_question=clarifying)
+    return LLMGeneratedPlan(steps=steps, clarifying_question=clarifying, custom_tools=custom_tools)
 
 
 class OpenAIPlanner(LLMPlanner):
@@ -141,18 +280,29 @@ class OpenAIPlanner(LLMPlanner):
     def generate(  # noqa: D401
         self,
         *,
-        user_message: str,
+        user_message: str | None = None,
         registry: ToolRegistry,
         system_prompt: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> LLMGeneratedPlan:
-        messages = _build_openai_messages(user_message, registry, system_prompt)
+        if not user_message and not conversation_history:
+            raise ValueError("Either user_message or conversation_history must be provided")
+
+        messages = _build_openai_messages(user_message, registry, system_prompt, conversation_history)
         response = self._client.chat.completions.create(
             model=self._model,
             response_format={"type": "json_object"},
             messages=messages,
         )
         content = response.choices[0].message.content
-        return _parse_plan_payload(content, registry)
+        parsed = _parse_plan_payload(content, registry)
+        external_history = _build_external_history(messages, content)
+
+        return LLMGeneratedPlan(
+            steps=parsed.steps,
+            clarifying_question=parsed.clarifying_question,
+            conversation_history=external_history,
+        )
 
 
 class AzureOpenAIPlanner(LLMPlanner):
@@ -175,105 +325,29 @@ class AzureOpenAIPlanner(LLMPlanner):
     def generate(  # noqa: D401
         self,
         *,
-        user_message: str,
+        user_message: str | None = None,
         registry: ToolRegistry,
         system_prompt: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> LLMGeneratedPlan:
-        messages = _build_openai_messages(user_message, registry, system_prompt)
+        if not user_message and not conversation_history:
+            raise ValueError("Either user_message or conversation_history must be provided")
+
+        messages = _build_openai_messages(user_message, registry, system_prompt, conversation_history)
         response = self._client.chat.completions.create(
             model=self._deployment,
             response_format={"type": "json_object"},
             messages=messages,
         )
-        return _parse_plan_payload(response.choices[0].message.content, registry)
+        content = response.choices[0].message.content
+        parsed = _parse_plan_payload(content, registry)
+        external_history = _build_external_history(messages, content)
 
-
-class AzureFoundryPlanner(LLMPlanner):
-    """Planner that calls Azure AI Foundry chat completion endpoint."""
-
-    def __init__(self) -> None:
-        self._endpoint = os.getenv("AZURE_FOUNDRY_ENDPOINT")
-        self._api_key = os.getenv("AZURE_FOUNDRY_API_KEY")
-        self._deployment = os.getenv("AZURE_FOUNDRY_DEPLOYMENT")
-        self._api_version = os.getenv("AZURE_FOUNDRY_API_VERSION", "2024-05-01-preview")
-        if not all([self._endpoint, self._api_key, self._deployment]):
-            raise EnvironmentError("Azure Foundry configuration is incomplete")
-
-    def generate(  # noqa: D401
-        self,
-        *,
-        user_message: str,
-        registry: ToolRegistry,
-        system_prompt: str | None = None,
-    ) -> LLMGeneratedPlan:
-        url = (
-            f"{self._endpoint}/openai/deployments/{self._deployment}/chat/completions"
-            f"?api-version={self._api_version}"
+        return LLMGeneratedPlan(
+            steps=parsed.steps,
+            clarifying_question=parsed.clarifying_question,
+            conversation_history=external_history,
         )
-        payload = {
-            "messages": _build_openai_messages(user_message, registry, system_prompt),
-            "response_format": {"type": "json_object"},
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "api-key": self._api_key,
-        }
-        response = requests.post(url, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
-        return _parse_plan_payload(content, registry)
-
-
-class ClaudePlanner(LLMPlanner):
-    """Planner that leverages Anthropic Claude models."""
-
-    def __init__(self, model: str | None = None) -> None:
-        if Anthropic is None:  # pragma: no cover
-            raise ImportError("anthropic package is required to use ClaudePlanner")
-
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise EnvironmentError("ANTHROPIC_API_KEY is not set")
-
-        self._client = Anthropic(api_key=api_key)
-        self._model = model or os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
-
-    def generate(  # noqa: D401
-        self,
-        *,
-        user_message: str,
-        registry: ToolRegistry,
-        system_prompt: str | None = None,
-    ) -> LLMGeneratedPlan:
-        prompt = _build_user_prompt(user_message, registry)
-        response = self._client.messages.create(
-            model=self._model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-            system=(
-                _resolve_system_prompt(system_prompt)
-                + " Output JSON with keys 'plan' (list of {tool, rationale, metadata})"
-                + " and 'clarifying_questions'."
-            ),
-        )
-        content = next((block.text for block in response.content if getattr(block, "text", None)), None)
-        return _parse_plan_payload(content, registry)
-
-
-def _build_openai_messages(
-    user_message: str,
-    registry: ToolRegistry,
-    system_prompt: str | None = None,
-) -> list[dict[str, str]]:
-    return [
-        {
-            "role": "system",
-            "content": _resolve_system_prompt(system_prompt),
-        },
-        {"role": "user", "content": _build_user_prompt(user_message, registry)},
-    ]
-
 
 def build_planner_from_env() -> LLMPlanner:
     provider = (os.getenv("LLM_PROVIDER") or "openai").lower()
@@ -282,10 +356,6 @@ def build_planner_from_env() -> LLMPlanner:
         return OpenAIPlanner()
     if provider == "azure_openai":
         return AzureOpenAIPlanner()
-    if provider == "azure_foundry":
-        return AzureFoundryPlanner()
-    if provider == "claude":
-        return ClaudePlanner()
 
     raise ValueError(
         "Unsupported LLM_PROVIDER. Expected one of: openai, azure_openai, azure_foundry, claude."
