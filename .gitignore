@@ -19,3 +19,4 @@ build/
 ENV/
 venv/
 test.py
+*.jsonl
