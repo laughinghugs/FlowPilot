@@ -113,31 +113,6 @@ End-to-end workflow:
 
 This flow keeps the manifest as the single source of truth, guarantees that every tool definition used by the pipeline is persisted alongside the plan, and gives non-technical stakeholders a simple login-like experience for interacting with the deployed pipeline.
 
-### Extending the tool inventory
-
-You can register custom tools (or override the defaults) and feed them into the planner:
-
-```python
-from agents import PlanningAgent, ToolRegistry
-
-registry = ToolRegistry()
-registry.register(name="VectorStoreRetriever", category="retrieval", description="Pinecone-backed recall")
-registry.register(name="OpenAIGenerator", category="generation", description="GPT-powered responses")
-
-agent = PlanningAgent(registry=registry)
-print(agent.plan("Retrieve company policies and answer questions."))
-```
-
-Any capabilities you register become eligible for selection when the agent synthesizes plans; missing categories will still trigger clarifying questions so you can iteratively enrich the registry.
-
-Steps to add a custom tool:
-1. `from agents import ToolRegistry, PlanningAgent`.
-2. Instantiate a registry (or start from an empty `ToolRegistry()`).
-3. Call `registry.register(name=..., category=..., description=...)` for each capability you provide.
-4. Pass the registry into `PlanningAgent(registry=registry)` (or `ToolInventory.from_registry(registry)` if you need a reusable snapshot).
-
-If you prefer to keep your tool specs in JSON, load them via `ToolRegistry.from_json("path/to/tools.json")` to bootstrap the registry in bulk.
-
 ### Configuring providers & manifests
 
 - Install dependencies (`poetry install`) so `openai`, `anthropic`, `python-dotenv`, `pydantic`, and `requests` are available.
