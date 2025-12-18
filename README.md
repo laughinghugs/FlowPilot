@@ -1,4 +1,4 @@
-# AgentsForAgents
+# FlowPilot
 
 A lightweight Poetry-managed Python scaffold for building agentic workflows. The repo ships with a `src`/`tests` layout, Ruff + Black for linting/formatting, MyPy for typing, and GitHub Actions CI.
 
@@ -173,11 +173,3 @@ Instead of relying on hard-coded tool implementations, `PipelineAgent` now mater
 - Otherwise, a generic payload is emitted for the step (`{"tool": ..., "rationale": ..., "metadata": ..., "status": "manifest_defined"}`) so you can inspect the requirements, implement the tool externally, or hand it off to another system.
 
 If you want to execute real tooling, provide your own resolver that knows how to interpret those manifest payloads (or extend `DefaultToolResolver` with concrete handlers for the tool names you control).
-
-## Next steps
-
-- Add your application-specific modules under `src/agents`.
-- Duplicate `configs/config.example.yaml` to match your deployment environments.
-- Extend the CI workflow with deploy/publish jobs when ready.
-- Use the RAG helpers under `src/tools` (retriever, generator, reranker, ragas evaluator) to compose retrieval-augmented agents.
-- Leverage `agents.PlanningAgent` to analyze user intents, map available tooling, and produce executable agent plans (or clarifying questions when capabilities are missing).
