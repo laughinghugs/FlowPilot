@@ -13,8 +13,7 @@ from .llm import (
 from .core import AgentMessage, build_agent_response
 from .pipeline import PipelineAgent, PipelineResult, ToolNotFoundError
 from .pipeline_builder import PipelineWorkspace, build_pipeline_workspace
-from .planner import AgentPlan, PlanningAgent, PlanningResult, ToolInventory
-from .registry import ToolRegistry, DEFAULT_TOOL_REGISTRY
+from .planner import AgentPlan, PlanningAgent, PlanningResult
 from .summarizer import ConversationSummarizer, build_summarizer_from_env
 
 __all__ = [
@@ -23,9 +22,6 @@ __all__ = [
     "AgentPlan",
     "PlanningAgent",
     "PlanningResult",
-    "ToolInventory",
-    "ToolRegistry",
-    "DEFAULT_TOOL_REGISTRY",
     "LLMPlanner",
     "LLMGeneratedPlan",
     "CustomToolDefinition",

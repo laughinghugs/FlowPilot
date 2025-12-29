@@ -1,10 +1,9 @@
 import json
-from importlib import resources
 from typing import Any, Sequence
 
 import pytest
 
-from agents import PlanningAgent, PlanningResult, ToolInventory, ToolRegistry
+from agents import PlanningAgent, PlanningResult
 from agents.llm import CustomToolDefinition, LLMGeneratedPlan, PlanStep
 
 
@@ -17,14 +16,12 @@ class StubPlanner:
         self,
         *,
         user_message: str | None = None,
-        registry: ToolRegistry,
         system_prompt: str | None = None,
         conversation_history: list[dict[str, str]] | None = None,
     ) -> LLMGeneratedPlan:
         self.calls.append(
             {
                 "user_message": user_message,
-                "registry": registry,
                 "system_prompt": system_prompt,
                 "conversation_history": conversation_history,
             }
@@ -62,7 +59,7 @@ def test_planning_agent_generates_plan_for_rag_request(tmp_path):
     assert result.plan is not None
     assert result.clarifying_question is None
     assert len(result.plan.steps) == 2
-    assert result.plan_id is not None
+    assert result.plan_id is None
     assert result.custom_tools == ()
 
 
@@ -80,33 +77,6 @@ def test_planning_agent_requests_clarification_when_needed(tmp_path):
     assert result.clarifying_question == "Need more info"
     assert result.plan_id is None
     assert result.custom_tools == ()
-
-
-def test_planning_agent_uses_custom_registry_entries(tmp_path):
-    registry = ToolRegistry()
-    registry.register(name="VectorRetriever", category="retrieval", description="vector search")
-    registry.register(name="TemplateLLMGenerator", category="generation", description="template responses")
-    stub_plan = LLMGeneratedPlan(
-        steps=[
-            PlanStep(tool="VectorRetriever", rationale="Search dense vectors", metadata={"top_k": 5}),
-            PlanStep(tool="TemplateLLMGenerator", rationale="Format answer", metadata={}),
-        ]
-    )
-    stub = StubPlanner(stub_plan)
-    agent = PlanningAgent(
-        registry=registry,
-        planner_backend=stub,
-        manifest_path=str(tmp_path / "manifest.jsonl"),
-        summarizer_backend=StubSummarizer(),
-    )
-
-    result = agent.plan("Retrieve knowledge base entries")
-
-    assert result.plan is not None
-    assert any(step.tool == "VectorRetriever" for step in result.plan.steps)
-    assert stub.calls
-    assert stub.calls[0]["registry"].capabilities()[0].name == "VectorRetriever"
-    assert stub.calls[0]["system_prompt"] is None
 
 
 def test_planning_agent_passes_system_prompt_to_backend(tmp_path):
@@ -170,27 +140,6 @@ def test_planning_agent_infers_user_message_from_history(tmp_path):
     assert stub.calls[0]["user_message"] == "Latest question"
 
 
-def test_default_registry_matches_json_spec():
-    resource = resources.files("agents").joinpath("default_tools.json")
-    expected = json.loads(resource.read_text(encoding="utf-8"))
-
-    registry = ToolRegistry.with_default_tools()
-
-    assert [cap.name for cap in registry.capabilities()] == [item["name"] for item in expected]
-
-
-def test_registry_can_load_external_json(tmp_path):
-    data = [
-        {"name": "VectorRetriever", "category": "retrieval", "description": "vector db"},
-        {"name": "LLM", "category": "generation", "description": "llm"},
-    ]
-    path = tmp_path / "custom_tools.json"
-    path.write_text(json.dumps(data), encoding="utf-8")
-
-    registry = ToolRegistry.from_json(str(path))
-
-    assert len(registry.capabilities()) == 2
-    assert registry.capabilities()[0].name == "VectorRetriever"
 def test_planning_agent_writes_manifest(tmp_path):
     stub_plan = LLMGeneratedPlan(
         steps=[PlanStep(tool="VectorRetriever", rationale="Reason", metadata={"foo": "bar"})],
@@ -212,14 +161,17 @@ def test_planning_agent_writes_manifest(tmp_path):
     )
 
     result = agent.plan("Need a plan")
+    plan_id = agent.finalize_plan(result, fallback_user_message="Need a plan")
 
     entries = manifest_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(entries) == 1
     payload = json.loads(entries[0])
     assert payload["user_message"] == "Manifest summary"
     assert payload["steps"][0]["tool"] == "VectorRetriever"
-    assert payload["plan_id"] == result.plan_id
-    assert payload["custom_tools"][0]["name"] == "CustomFetcher"
+    assert payload["plan_id"] == plan_id
+    derived_tool = payload["custom_tools"][0]
+    assert derived_tool["name"] == "VectorRetriever"
+    assert derived_tool["metadata"]["derived_from_plan"] is True
 
 
 def test_manifest_not_written_when_clarification_needed(tmp_path):
@@ -238,6 +190,24 @@ def test_manifest_not_written_when_clarification_needed(tmp_path):
 
     assert result.plan_id is None
     assert not manifest_path.exists() or not manifest_path.read_text(encoding="utf-8").strip()
+
+
+def test_finalize_plan_does_not_write_without_confirmation(tmp_path):
+    stub_plan = LLMGeneratedPlan(
+        steps=[PlanStep(tool="VectorRetriever", rationale="Reason", metadata={})],
+    )
+    manifest_path = tmp_path / "manifest.jsonl"
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(stub_plan),
+        manifest_path=str(manifest_path),
+        summarizer_backend=StubSummarizer(),
+    )
+
+    result = agent.plan("Need a plan")
+    assert not manifest_path.exists()
+
+    agent.finalize_plan(result, fallback_user_message="Need a plan")
+    assert manifest_path.exists()
 
 
 def test_planning_agent_surfaces_custom_tools(tmp_path):
@@ -265,5 +235,7 @@ def test_planning_agent_surfaces_custom_tools(tmp_path):
     result = agent.plan("Summarize supplier policies")
 
     assert result.custom_tools == (custom_tool,)
+    agent.finalize_plan(result, fallback_user_message="Summarize supplier policies")
     payload = json.loads(manifest_path.read_text(encoding="utf-8").strip())
     assert payload["custom_tools"][0]["name"] == "CustomSummarizer"
+    assert payload["custom_tools"][0]["metadata"]["derived_from_plan"] is True

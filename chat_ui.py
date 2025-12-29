@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import TypedDict
 
-from agents import PlanningAgent, PipelineAgent
+from agents import AgentPlan, PlanningAgent, PipelineAgent
 from agents.pipeline_builder import build_pipeline_workspace
 
 
@@ -58,9 +58,15 @@ def run_planner_chat(system_prompt: str | None) -> None:
             continue
 
         if result.plan:
-            plan_id = result.plan_id or "N/A"
-            print(f"Your plan is created and your plan_id is {plan_id}")
-            break
+            summary = _format_plan_summary(result.plan)
+            print("\nProposed plan:")
+            print(summary)
+            if _prompt_for_confirmation():
+                plan_id = agent.finalize_plan(result, fallback_user_message=user_input)
+                print(f"Your plan is created and your plan_id is {plan_id}")
+                break
+            print("Got it. Please describe the adjustments you need.\n")
+            continue
 
         ai_message = _latest_ai_message(conversation_history)
         if ai_message:
@@ -122,6 +128,25 @@ def _append_pipeline_history(path: Path, user_message: str, response: str) -> No
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"role": "user", "content": user_message}) + "\n")
         handle.write(json.dumps({"role": "pipeline", "content": response}) + "\n")
+
+
+def _format_plan_summary(plan: AgentPlan) -> str:
+    lines = []
+    for idx, step in enumerate(plan.steps, start=1):
+        metadata_preview = ", ".join(f"{k}={v!r}" for k, v in step.metadata.items())
+        metadata_text = f" | metadata: {metadata_preview}" if metadata_preview else ""
+        lines.append(f"{idx}. {step.tool} — {step.rationale}{metadata_text}")
+    return "\n".join(lines) if lines else "No steps defined."
+
+
+def _prompt_for_confirmation() -> bool:
+    while True:
+        response = input("Proceed with this plan? [y/n]: ").strip().lower()
+        if response in {"y", "yes"}:
+            return True
+        if response in {"n", "no"}:
+            return False
+        print("Please answer with 'y' or 'n'.")
 
 
 def main() -> None:

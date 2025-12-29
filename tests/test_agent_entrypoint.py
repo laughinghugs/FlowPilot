@@ -1,4 +1,4 @@
-from agents import PlanningAgent, ToolRegistry
+from agents import PlanningAgent
 from agents.llm import LLMGeneratedPlan, PlanStep
 
 
@@ -16,7 +16,6 @@ class StubPlanner:
         self,
         *,
         user_message: str | None = None,
-        registry: ToolRegistry,
         system_prompt: str | None = None,
         conversation_history: list[dict[str, str]] | None = None,
     ) -> LLMGeneratedPlan:
@@ -36,6 +35,8 @@ def test_planning_agent_generates_plan_for_rag_request(tmp_path):
     assert result.plan is not None
     assert result.clarifying_question is None
     assert len(result.plan.steps) == 3
+
+
 class StubSummarizer:
     def summarize(self, conversation_history, *, fallback_text):
         return fallback_text
