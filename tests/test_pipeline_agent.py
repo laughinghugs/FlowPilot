@@ -75,6 +75,11 @@ def test_build_pipeline_workspace_materializes_files(tmp_path):
     assert workspace.path.exists()
     assert workspace.pipeline_file.exists()
     assert workspace.custom_tool_files
+    assert workspace.codebase_path is not None
+    tools_source = (workspace.codebase_path / "tools.py").read_text(encoding="utf-8")
+    assert "run_template_llm_generator" in tools_source
+    agent_source = (workspace.codebase_path / "agent.py").read_text(encoding="utf-8")
+    assert "AgenticPipeline" in agent_source
     tool_payload = json.loads(workspace.custom_tool_files[0].read_text(encoding="utf-8"))
     assert tool_payload["name"] == "CustomFetcher"
 

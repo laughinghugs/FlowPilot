@@ -1,6 +1,6 @@
 import json
 from importlib import resources
-from typing import Any
+from typing import Any, Sequence
 
 import pytest
 
@@ -32,6 +32,16 @@ class StubPlanner:
         return self.plan
 
 
+class StubSummarizer:
+    def __init__(self, summary: str = "Stub summary"):
+        self.summary = summary
+        self.calls: list[Sequence[dict[str, str]]] = []
+
+    def summarize(self, conversation_history: Sequence[dict[str, str]], *, fallback_text: str) -> str:
+        self.calls.append(tuple(conversation_history))
+        return self.summary
+
+
 def test_planning_agent_generates_plan_for_rag_request(tmp_path):
     stub_plan = LLMGeneratedPlan(
         steps=[
@@ -40,7 +50,11 @@ def test_planning_agent_generates_plan_for_rag_request(tmp_path):
         ]
     )
     manifest_path = tmp_path / "manifest.jsonl"
-    agent = PlanningAgent(planner_backend=StubPlanner(stub_plan), manifest_path=str(manifest_path))
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(stub_plan),
+        manifest_path=str(manifest_path),
+        summarizer_backend=StubSummarizer(),
+    )
 
     result = agent.plan("Need a RAG workflow to retrieve docs and generate answers")
 
@@ -54,7 +68,11 @@ def test_planning_agent_generates_plan_for_rag_request(tmp_path):
 
 def test_planning_agent_requests_clarification_when_needed(tmp_path):
     stub_plan = LLMGeneratedPlan(steps=[], clarifying_question="Need more info")
-    agent = PlanningAgent(planner_backend=StubPlanner(stub_plan), manifest_path=str(tmp_path / "manifest.jsonl"))
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(stub_plan),
+        manifest_path=str(tmp_path / "manifest.jsonl"),
+        summarizer_backend=StubSummarizer(),
+    )
 
     result = agent.plan("Do something vague")
 
@@ -75,7 +93,12 @@ def test_planning_agent_uses_custom_registry_entries(tmp_path):
         ]
     )
     stub = StubPlanner(stub_plan)
-    agent = PlanningAgent(registry=registry, planner_backend=stub, manifest_path=str(tmp_path / "manifest.jsonl"))
+    agent = PlanningAgent(
+        registry=registry,
+        planner_backend=stub,
+        manifest_path=str(tmp_path / "manifest.jsonl"),
+        summarizer_backend=StubSummarizer(),
+    )
 
     result = agent.plan("Retrieve knowledge base entries")
 
@@ -95,6 +118,7 @@ def test_planning_agent_passes_system_prompt_to_backend(tmp_path):
         planner_backend=stub,
         system_prompt="Be concise.",
         manifest_path=str(tmp_path / "manifest.jsonl"),
+        summarizer_backend=StubSummarizer(),
     )
 
     agent.plan("Retrieve stuff")
@@ -112,7 +136,11 @@ def test_planning_agent_surfaces_conversation_history(tmp_path):
         steps=[PlanStep(tool="VectorRetriever", rationale="Reason", metadata={})],
         conversation_history=returned_history,
     )
-    agent = PlanningAgent(planner_backend=StubPlanner(stub_plan), manifest_path=str(tmp_path / "manifest.jsonl"))
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(stub_plan),
+        manifest_path=str(tmp_path / "manifest.jsonl"),
+        summarizer_backend=StubSummarizer(),
+    )
 
     result = agent.plan("Need a plan")
 
@@ -131,7 +159,11 @@ def test_planning_agent_infers_user_message_from_history(tmp_path):
         conversation_history=conversation_history + [{"role": "AI", "content": "Final answer"}],
     )
     stub = StubPlanner(stub_plan)
-    agent = PlanningAgent(planner_backend=stub, manifest_path=str(tmp_path / "manifest.jsonl"))
+    agent = PlanningAgent(
+        planner_backend=stub,
+        manifest_path=str(tmp_path / "manifest.jsonl"),
+        summarizer_backend=StubSummarizer(),
+    )
 
     agent.plan(conversation_history=conversation_history)
 
@@ -173,14 +205,18 @@ def test_planning_agent_writes_manifest(tmp_path):
         ],
     )
     manifest_path = tmp_path / "manifest.jsonl"
-    agent = PlanningAgent(planner_backend=StubPlanner(stub_plan), manifest_path=str(manifest_path))
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(stub_plan),
+        manifest_path=str(manifest_path),
+        summarizer_backend=StubSummarizer("Manifest summary"),
+    )
 
     result = agent.plan("Need a plan")
 
     entries = manifest_path.read_text(encoding="utf-8").strip().splitlines()
     assert len(entries) == 1
     payload = json.loads(entries[0])
-    assert payload["user_message"] == "Need a plan"
+    assert payload["user_message"] == "Manifest summary"
     assert payload["steps"][0]["tool"] == "VectorRetriever"
     assert payload["plan_id"] == result.plan_id
     assert payload["custom_tools"][0]["name"] == "CustomFetcher"
@@ -192,7 +228,11 @@ def test_manifest_not_written_when_clarification_needed(tmp_path):
         clarifying_question="Need more info",
     )
     manifest_path = tmp_path / "manifest.jsonl"
-    agent = PlanningAgent(planner_backend=StubPlanner(stub_plan), manifest_path=str(manifest_path))
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(stub_plan),
+        manifest_path=str(manifest_path),
+        summarizer_backend=StubSummarizer(),
+    )
 
     result = agent.plan("Need a plan")
 
@@ -216,7 +256,11 @@ def test_planning_agent_surfaces_custom_tools(tmp_path):
         custom_tools=[custom_tool],
     )
     manifest_path = tmp_path / "manifest.jsonl"
-    agent = PlanningAgent(planner_backend=StubPlanner(stub_plan), manifest_path=str(manifest_path))
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(stub_plan),
+        manifest_path=str(manifest_path),
+        summarizer_backend=StubSummarizer(),
+    )
 
     result = agent.plan("Summarize supplier policies")
 

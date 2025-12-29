@@ -25,10 +25,17 @@ class StubPlanner:
 
 
 def test_planning_agent_generates_plan_for_rag_request(tmp_path):
-    agent = PlanningAgent(planner_backend=StubPlanner(), manifest_path=str(tmp_path / "manifest.jsonl"))
+    agent = PlanningAgent(
+        planner_backend=StubPlanner(),
+        manifest_path=str(tmp_path / "manifest.jsonl"),
+        summarizer_backend=StubSummarizer(),
+    )
 
     result = agent.plan("Need retrieval, reranking, and generation for a RAG agent.")
 
     assert result.plan is not None
     assert result.clarifying_question is None
     assert len(result.plan.steps) == 3
+class StubSummarizer:
+    def summarize(self, conversation_history, *, fallback_text):
+        return fallback_text

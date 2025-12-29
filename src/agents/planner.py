@@ -9,6 +9,7 @@ from typing import Sequence
 from .llm import CustomToolDefinition, LLMGeneratedPlan, LLMPlanner, PlanStep, build_planner_from_env
 from .manifest import PlanManifestEntry, PlanManifestWriter
 from .registry import DEFAULT_TOOL_REGISTRY, ToolCapability, ToolRegistry
+from .summarizer import ConversationSummarizer, build_summarizer_from_env
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,7 @@ class PlanningAgent:
         planner_backend: LLMPlanner | None = None,
         system_prompt: str | None = None,
         manifest_path: str | None = None,
+        summarizer_backend: ConversationSummarizer | None = None,
     ) -> None:
         if inventory and registry:
             raise ValueError("Provide either inventory or registry, not both.")
@@ -80,6 +82,7 @@ class PlanningAgent:
             self._inventory = ToolInventory.from_registry(self._registry)
         self._planner = planner_backend or build_planner_from_env()
         self._system_prompt = system_prompt
+        self._summarizer = summarizer_backend or build_summarizer_from_env()
         resolved_manifest_path = manifest_path or os.getenv("PLAN_MANIFEST_PATH", "plan_manifests.jsonl")
         self._manifest_writer = PlanManifestWriter(resolved_manifest_path) if resolved_manifest_path else None
 
@@ -129,9 +132,10 @@ class PlanningAgent:
         plan = AgentPlan(steps=tuple(llm_plan.steps))
         plan_id = None
         if llm_plan.clarifying_question is None:
+            summary = self._summarize_conversation(history, fallback_text=user_message)
             plan_id = self._record_manifest(
                 plan,
-                user_message=user_message,
+                user_message=summary,
                 custom_tools=llm_plan.custom_tools,
             )
         return PlanningResult(
@@ -159,6 +163,17 @@ class PlanningAgent:
         )
         self._manifest_writer.write(entry)
         return entry.plan_id
+
+    def _summarize_conversation(
+        self,
+        conversation_history: Sequence[dict[str, str]],
+        *,
+        fallback_text: str,
+    ) -> str:
+        try:
+            return self._summarizer.summarize(conversation_history, fallback_text=fallback_text)
+        except Exception:
+            return fallback_text
 
 
 def _latest_user_message(history: Sequence[dict[str, str]] | None) -> str | None:
