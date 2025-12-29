@@ -8,7 +8,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .manifest import PlanManifestReader
+from .codegen import PipelineCodeGenerator, TemplatePipelineCodeGenerator, build_code_generator_from_env
+from .manifest import PlanManifestEntry, PlanManifestReader
 from .pipeline import PipelineAgent
 
 
@@ -21,6 +22,7 @@ class PipelineWorkspace:
     pipeline_file: Path
     custom_tool_files: tuple[Path, ...]
     outputs_file: Path | None = None
+    codebase_path: Path | None = None
 
 
 def build_pipeline_workspace(
@@ -30,6 +32,7 @@ def build_pipeline_workspace(
     output_root: str = "pipelines",
     initial_context: dict[str, Any] | None = None,
     run_pipeline: bool = True,
+    code_generator: PipelineCodeGenerator | None = None,
 ) -> PipelineWorkspace:
     """
     Create a filesystem workspace for the given plan id and optionally execute it once.
@@ -69,12 +72,16 @@ def build_pipeline_workspace(
         outputs.write_text(json.dumps(_jsonify(result.context), indent=2, ensure_ascii=False), encoding="utf-8")
         outputs_file = outputs
 
+    generator = code_generator or build_code_generator_from_env()
+    codebase_path = _create_codebase(entry, workspace_dir, generator)
+
     return PipelineWorkspace(
         plan_id=plan_id,
         path=workspace_dir,
         pipeline_file=pipeline_file,
         custom_tool_files=tuple(custom_tool_files),
         outputs_file=outputs_file,
+        codebase_path=codebase_path,
     )
 
 
@@ -97,6 +104,35 @@ def _jsonify(value: Any) -> Any:
     if isinstance(value, Iterable):
         return [_jsonify(item) for item in value]
     return repr(value)
+
+
+def _create_codebase(
+    entry: PlanManifestEntry,
+    workspace_dir: Path,
+    code_generator: PipelineCodeGenerator,
+) -> Path:
+    code_dir = workspace_dir / "agent_pipeline"
+    code_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        artifacts = code_generator.generate(entry)
+    except Exception:  # pragma: no cover - fallback
+        artifacts = TemplatePipelineCodeGenerator().generate(entry)
+
+    artifacts = dict(artifacts)
+    artifacts.setdefault(
+        "__init__.py",
+        '"""Auto-generated agent pipeline package."""\nfrom .agent import AgenticPipeline\n\n__all__ = ["AgenticPipeline"]\n',
+    )
+
+    for relative_path, content in artifacts.items():
+        target = code_dir / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((content.rstrip() + "\n"), encoding="utf-8")
+
+    return code_dir
+
+
 
 
 __all__ = ["PipelineWorkspace", "build_pipeline_workspace"]

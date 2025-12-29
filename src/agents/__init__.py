@@ -1,5 +1,6 @@
 """Agent-centric helpers."""
 
+from .codegen import PipelineCodeGenerator, TemplatePipelineCodeGenerator, build_code_generator_from_env
 from .llm import (
     AzureOpenAIPlanner,
     CustomToolDefinition,
@@ -12,8 +13,8 @@ from .llm import (
 from .core import AgentMessage, build_agent_response
 from .pipeline import PipelineAgent, PipelineResult, ToolNotFoundError
 from .pipeline_builder import PipelineWorkspace, build_pipeline_workspace
-from .planner import AgentPlan, PlanningAgent, PlanningResult, ToolInventory
-from .registry import ToolRegistry, DEFAULT_TOOL_REGISTRY
+from .planner import AgentPlan, PlanningAgent, PlanningResult
+from .summarizer import ConversationSummarizer, build_summarizer_from_env
 
 __all__ = [
     "AgentMessage",
@@ -21,9 +22,6 @@ __all__ = [
     "AgentPlan",
     "PlanningAgent",
     "PlanningResult",
-    "ToolInventory",
-    "ToolRegistry",
-    "DEFAULT_TOOL_REGISTRY",
     "LLMPlanner",
     "LLMGeneratedPlan",
     "CustomToolDefinition",
@@ -31,6 +29,11 @@ __all__ = [
     "OpenAIPlanner",
     "AzureOpenAIPlanner",
     "build_planner_from_env",
+    "PipelineCodeGenerator",
+    "TemplatePipelineCodeGenerator",
+    "build_code_generator_from_env",
+    "ConversationSummarizer",
+    "build_summarizer_from_env",
     "PipelineAgent",
     "PipelineResult",
     "ToolNotFoundError",

@@ -58,6 +58,10 @@ def main() -> None:
     print(f"Workspace created at {workspace.path}")  # noqa: T201
     if workspace.outputs_file:
         print(f"Initial pipeline outputs saved to {workspace.outputs_file}")  # noqa: T201
+    if workspace.codebase_path:
+        print(f"Agent codebase available at {workspace.codebase_path}")  # noqa: T201
+    if workspace.codebase_path:
+        print(f"Agent codebase available at {workspace.codebase_path}")  # noqa: T201
 
 
 if __name__ == "__main__":

@@ -8,31 +8,7 @@ from typing import Sequence
 
 from .llm import CustomToolDefinition, LLMGeneratedPlan, LLMPlanner, PlanStep, build_planner_from_env
 from .manifest import PlanManifestEntry, PlanManifestWriter
-from .registry import DEFAULT_TOOL_REGISTRY, ToolCapability, ToolRegistry
-
-
-@dataclass(frozen=True)
-class ToolInventory:
-    """Collection of available tools grouped by capability."""
-
-    tools: Sequence[ToolCapability]
-
-    def categories(self) -> set[str]:
-        return {tool.category for tool in self.tools}
-
-    def get_tool(self, category: str):
-        for tool in self.tools:
-            if tool.category == category:
-                return tool
-        return None
-
-    @classmethod
-    def default(cls) -> "ToolInventory":
-        return cls.from_registry(DEFAULT_TOOL_REGISTRY)
-
-    @classmethod
-    def from_registry(cls, registry: ToolRegistry) -> "ToolInventory":
-        return cls(tools=registry.capabilities())
+from .summarizer import ConversationSummarizer, build_summarizer_from_env
 
 
 @dataclass(frozen=True)
@@ -63,23 +39,14 @@ class PlanningAgent:
 
     def __init__(
         self,
-        inventory: ToolInventory | None = None,
-        registry: ToolRegistry | None = None,
         planner_backend: LLMPlanner | None = None,
         system_prompt: str | None = None,
         manifest_path: str | None = None,
+        summarizer_backend: ConversationSummarizer | None = None,
     ) -> None:
-        if inventory and registry:
-            raise ValueError("Provide either inventory or registry, not both.")
-
-        if inventory is not None:
-            self._inventory = inventory
-            self._registry = registry or ToolRegistry(capabilities=inventory.tools)
-        else:
-            self._registry = registry or DEFAULT_TOOL_REGISTRY
-            self._inventory = ToolInventory.from_registry(self._registry)
         self._planner = planner_backend or build_planner_from_env()
         self._system_prompt = system_prompt
+        self._summarizer = summarizer_backend or build_summarizer_from_env()
         resolved_manifest_path = manifest_path or os.getenv("PLAN_MANIFEST_PATH", "plan_manifests.jsonl")
         self._manifest_writer = PlanManifestWriter(resolved_manifest_path) if resolved_manifest_path else None
 
@@ -107,13 +74,38 @@ class PlanningAgent:
 
         llm_plan = self._planner.generate(
             user_message=effective_user_message,
-            registry=self._registry,
             system_prompt=system_prompt or self._system_prompt,
             conversation_history=history_list or None,
         )
-        return self._convert_llm_plan(llm_plan, user_message=effective_user_message)
+        return self._convert_llm_plan(llm_plan)
 
-    def _convert_llm_plan(self, llm_plan: LLMGeneratedPlan, *, user_message: str) -> PlanningResult:
+    def finalize_plan(self, result: PlanningResult, *, fallback_user_message: str) -> str:
+        """
+        Persist the confirmed plan to the manifest and auto-generate custom tools from the plan steps.
+
+        Args:
+            result: PlanningResult from a previous call that includes a finalized plan.
+            fallback_user_message: Used when the summarizer cannot infer a requirement brief.
+        """
+        if not result.plan:
+            raise ValueError("Cannot finalize a planning result without a plan.")
+        if result.clarifying_question:
+            raise ValueError("Cannot finalize a plan while clarifying questions remain.")
+        if not self._manifest_writer:
+            raise RuntimeError("Manifest writer is not configured; cannot finalize plan.")
+
+        summary = self._summarize_conversation(result.conversation_history, fallback_text=fallback_user_message)
+        derived_tools = self._derive_custom_tools_from_plan(result.plan)
+        plan_id = self._record_manifest(
+            result.plan,
+            user_message=summary,
+            custom_tools=derived_tools,
+        )
+        if not plan_id:
+            raise RuntimeError("Failed to write manifest entry.")
+        return plan_id
+
+    def _convert_llm_plan(self, llm_plan: LLMGeneratedPlan) -> PlanningResult:
         history = tuple(llm_plan.conversation_history)
         custom_tools = tuple(llm_plan.custom_tools)
         if not llm_plan.steps and llm_plan.clarifying_question:
@@ -127,18 +119,10 @@ class PlanningAgent:
             raise ValueError("LLM did not return plan steps or clarification")
 
         plan = AgentPlan(steps=tuple(llm_plan.steps))
-        plan_id = None
-        if llm_plan.clarifying_question is None:
-            plan_id = self._record_manifest(
-                plan,
-                user_message=user_message,
-                custom_tools=llm_plan.custom_tools,
-            )
         return PlanningResult(
             plan=plan,
             clarifying_question=llm_plan.clarifying_question,
             conversation_history=history,
-            plan_id=plan_id,
             custom_tools=custom_tools,
         )
 
@@ -159,6 +143,43 @@ class PlanningAgent:
         )
         self._manifest_writer.write(entry)
         return entry.plan_id
+
+    def _summarize_conversation(
+        self,
+        conversation_history: Sequence[dict[str, str]],
+        *,
+        fallback_text: str,
+    ) -> str:
+        try:
+            return self._summarizer.summarize(conversation_history, fallback_text=fallback_text)
+        except Exception:
+            return fallback_text
+
+    def _derive_custom_tools_from_plan(self, plan: AgentPlan) -> tuple[CustomToolDefinition, ...]:
+        """Create deterministic custom tool definitions from the plan steps."""
+        derived: list[CustomToolDefinition] = []
+        seen: set[str] = set()
+        for step in plan.steps:
+            if step.tool in seen:
+                continue
+            seen.add(step.tool)
+            metadata = dict(step.metadata)
+            inputs: str | dict[str, list[str]]
+            if metadata:
+                inputs = {"expected_fields": sorted(metadata.keys())}
+            else:
+                inputs = "Accept the user's query and any shared context dict."
+            derived.append(
+                CustomToolDefinition(
+                    name=step.tool,
+                    purpose=step.rationale or f"Auto-generated tool for {step.tool}",
+                    inputs=inputs,
+                    data_sources=None,
+                    credentials=None,
+                    metadata={"derived_from_plan": True, "plan_metadata": metadata},
+                )
+            )
+        return tuple(derived)
 
 
 def _latest_user_message(history: Sequence[dict[str, str]] | None) -> str | None:

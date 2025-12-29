@@ -89,11 +89,13 @@ class PipelineAgent:
     def execute(self, plan_id: str, context: dict[str, Any] | None = None) -> PipelineResult:
         entry = self._reader.get(plan_id)
         ctx = dict(context or {})
+        print("Registered custom tools:", entry)
 
         if hasattr(self._resolver, "register_custom_tools"):
             self._resolver.register_custom_tools(entry.custom_tools)
 
         for step in entry.steps:
+            print("Executing step:", step)
             self._resolver.execute(step, ctx)
 
         return PipelineResult(context=ctx, plan_id=plan_id)
